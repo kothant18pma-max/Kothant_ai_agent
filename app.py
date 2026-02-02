@@ -57,16 +57,24 @@ async def tg_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_document(document=BytesIO(get_docx(res)), filename="Report.docx")
             os.remove(t.name)
 
-def start_bot():
+if __name__ == '__main__':
+    # ၁။ Token ကို သေချာစစ်ဆေးပါ
     token = os.getenv("TELEGRAM_TOKEN")
-    if token:
-        bot = ApplicationBuilder().token(token).build()
-        bot.add_handler(MessageHandler(filters.Document.PDF, tg_msg))
-        bot.run_polling()
-
-if "bot_active" not in st.session_state:
-    threading.Thread(target=start_bot, daemon=True).start()
-    st.session_state.bot_active = True
+    
+    if not token:
+        print("CRITICAL ERROR: TELEGRAM_TOKEN is missing in Environment Variables!")
+    else:
+        # ၂။ Application ကို တည်ဆောက်ပါ
+        application = ApplicationBuilder().token(token).build()
+        
+        # ၃။ PDF Handler ကို ထည့်ပါ (filters.Document.PDF သေချာပါစေ)
+        pdf_handler = MessageHandler(filters.Document.PDF, tg_msg)
+        application.add_handler(pdf_handler)
+        
+        print("--- Bot is now LIVE and Polling ---")
+        
+        # ၄။ ပိုမိုမြန်ဆန်စွာ အလုပ်လုပ်စေရန် polling ကို run ပါ
+        application.run_polling(drop_pending_updates=True)
 
 # --- Streamlit UI ---
 st.title("🔍 Web + Telegram AI Agent")
@@ -84,3 +92,4 @@ if up and key:
                 st.write(res)
                 st.download_button("📥 Word File", data=get_docx(res), file_name="report.docx")
                 os.remove(t.name)
+
