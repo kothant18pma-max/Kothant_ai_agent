@@ -17,6 +17,7 @@ def home(): return "AI Agent is Running!"
 
 def run_flask():
     try:
+        # Render အတွက် Port 10000 က မပါမဖြစ်ပါ
         flask_app.run(host='0.0.0.0', port=10000)
     except: pass
 
