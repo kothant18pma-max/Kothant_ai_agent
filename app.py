@@ -45,7 +45,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pdf_content = "\n".join([p.page_content for p in loader.load()])
             
             # Gemini LLM Setup (gemini-1.5-flash ကို သုံးပါ)
-            gemini_llm = LLM(model="gemini/gemini-1.5-flash")
+            gemini_llm = LLM(model="gemini/gemini-2.5-flash")
             
             researcher = Agent(
                 role='ဝါရင့် သုတေသီ',
@@ -91,3 +91,4 @@ if __name__ == '__main__':
         
         print("Bot is starting...")
         app_bot.run_polling()
+
