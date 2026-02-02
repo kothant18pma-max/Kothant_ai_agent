@@ -1,66 +1,67 @@
 import streamlit as st
 import os
 from crewai import Agent, Task, Crew, LLM
+from crewai_tools import PDFSearchTool, SerperDevTool
 from langchain_community.document_loaders import PyPDFLoader
 import tempfile
 
-# UI အပြင်အဆင်
-st.set_page_config(page_title="AI PDF Analyst", layout="centered")
-st.title("📄 AI PDF Analyst (Myanmar)")
-st.write("PDF ဖိုင်တင်ပြီး အနှစ်ချုပ်ခိုင်းကြည့်ပါ။")
+st.set_page_config(page_title="AI Researcher", layout="wide")
+st.title("🔍 Advanced AI Researcher (PDF + Web)")
 
-# API Key ထည့်ရန် (Sidebar တွင် ထည့်ခိုင်းခြင်းက ပိုလုံခြုံသည်)
+# Sidebar for API Keys
 with st.sidebar:
-    google_api_key = st.text_input("Google API Key", type="password")
-    os.environ["GOOGLE_API_KEY"] = google_api_key
+    st.header("API Configuration")
+    google_key = st.text_input("Google API Key", type="password")
+    serper_key = st.text_input("Serper API Key (for Web Search)", type="password")
+    
+    if google_key:
+        os.environ["GOOGLE_API_KEY"] = google_key
+    if serper_key:
+        os.environ["SERPER_API_KEY"] = serper_key
 
-# PDF Upload လုပ်ရန်
-uploaded_file = st.file_uploader("PDF ဖိုင်ရွေးပါ", type=["pdf"])
+# PDF Upload
+uploaded_file = st.file_uploader("သုတေသနပြုမည့် PDF တင်ပါ", type=["pdf"])
 
-if uploaded_file and google_api_key:
-    if st.button("စတင်လေ့လာပါ"):
-        with st.spinner("Agent များ အလုပ်လုပ်နေပါပြီ... ခဏစောင့်ပါ"):
-            try:
-                # ၁။ PDF ကို ယာယီသိမ်းပြီး ဖတ်ခြင်း
-                with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                    tmp_file.write(uploaded_file.getvalue())
-                    tmp_path = tmp_file.name
+if uploaded_file and google_key:
+    if st.button("သုတေသန စတင်ပါ"):
+        with st.spinner("Agent များ အလုပ်လုပ်နေပါပြီ..."):
+            # ၁။ PDF ဖတ်ခြင်း
+            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                tmp_file.write(uploaded_file.getvalue())
+                tmp_path = tmp_file.name
 
-                loader = PyPDFLoader(tmp_path)
-                pages = loader.load_and_split()
-                pdf_content = "\n".join([page.page_content for page in pages])
+            loader = PyPDFLoader(tmp_path)
+            pages = loader.load_and_split()
+            pdf_content = "\n".join([page.page_content for page in pages])
 
-                # ၂။ CrewAI Setup
-                gemini_llm = LLM(model="gemini/gemini-2.5-flash")
+            # ၂။ Tools & LLM
+            search_tool = SerperDevTool()
+            gemini_llm = LLM(model="gemini/gemini-2.5-flash")
 
-                analyst = Agent(
-                    role='စာရွက်စာတမ်း ကျွမ်းကျင်သူ',
-                    goal='PDF အချက်အလက်များကို မြန်မာလို အနှစ်ချုပ်ရန်',
-                    backstory='သင်သည် စာရွက်စာတမ်းများကို စေ့စေ့စပ်စပ် ဖတ်ရှုနိုင်သူဖြစ်သည်။',
-                    llm=gemini_llm
-                )
+            # ၃။ Agents
+            researcher = Agent(
+                role='ဝါရင့် သုတေသီ',
+                goal='PDF ထဲမှ အချက်အလက်များကို အခြေခံပြီး အင်တာနက်ပေါ်ရှိ နောက်ဆုံးရသတင်းများနှင့် တိုက်ဆိုင်စစ်ဆေးရန်',
+                backstory='သင်သည် အချက်အလက်များကို နှိုင်းယှဉ်လေ့လာရာတွင် ကျွမ်းကျင်သူဖြစ်ပြီး တိကျမှန်ကန်မှုကို ဦးစားပေးသူဖြစ်သည်။',
+                tools=[search_tool],
+                llm=gemini_llm
+            )
 
-                task = Task(
-                    description=f"အောက်ပါ စာသားများကို ဖတ်ပြီး အချက် ၅ ချက်ဖြင့် မြန်မာလို အနှစ်ချုပ်ပါ: \n\n {pdf_content}",
-                    expected_output="သပ်ရပ်သော မြန်မာလို အနှစ်ချုပ် အစီရင်ခံစာ။",
-                    agent=analyst
-                )
+            # ၄။ Tasks
+            task = Task(
+                description=f"""
+                ၁။ ပေးထားသော PDF အချက်အလက်များကို ဖတ်ပါ: {pdf_content}
+                ၂။ ထိုအကြောင်းအရာနှင့် ပတ်သက်၍ အင်တာနက်တွင် နောက်ဆုံးရသတင်းများကို ရှာဖွေပါ။
+                ၃။ PDF ပါ အချက်အလက်နှင့် အပြင်လောက သတင်းများကို နှိုင်းယှဉ်ပြီး မြန်မာလို အစီရင်ခံစာ ရေးပေးပါ။
+                """,
+                expected_output="PDF နှင့် အင်တာနက်သတင်းများကို နှိုင်းယှဉ်ထားသော ပြည့်စုံသည့် မြန်မာလို သုတေသန မှတ်တမ်း။",
+                agent=researcher
+            )
 
-                crew = Crew(agents=[analyst], tasks=[task])
-                result = crew.kickoff()
+            crew = Crew(agents=[researcher], tasks=[task])
+            result = crew.kickoff()
 
-                # ၃။ အဖြေထုတ်ပြခြင်း
-                st.success("ပြီးစီးပါပြီ!")
-                st.markdown("### 📋 အနှစ်ချုပ် ရလဒ်")
-                st.write(str(result))
-                
-                # File အဖြစ် ပြန်ဒေါင်းရန်
-                st.download_button("Report ကို ဒေါင်းလုဒ်ဆွဲရန်", str(result), file_name="summary.txt")
-
-                os.remove(tmp_path) # ယာယီဖိုင်ကို ပြန်ဖျက်ခြင်း
-
-            except Exception as e:
-                st.error(f"Error တက်သွားပါသည်: {e}")
-else:
-
-    st.info("အပေါ်က အကွက်မှာ PDF တင်ပြီး ဘေးက Sidebar မှာ API Key ထည့်ပေးပါ။")
+            st.success("သုတေသန ပြီးစီးပါပြီ!")
+            st.markdown(result.raw)
+            
+            os.remove(tmp_path)
