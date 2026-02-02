@@ -3,6 +3,7 @@ import threading
 import tempfile
 import streamlit as st
 import telegram.constants
+import pandas as pd
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
@@ -23,27 +24,39 @@ def run_flask():
 
 threading.Thread(target=run_flask, daemon=True).start()
 
-# --- Shared AI Function ---
+# --- Excel Conversion Function ---
+def get_excel(text):
+    try:
+        # AI ထုတ်ပေးတဲ့ Markdown Table (| Col1 | Col2 |) ကို ရှာဖွေပြီး Excel ပြောင်းခြင်း
+        lines = [line.strip().strip('|').split('|') for line in text.split('\n') if '|' in line]
+        if len(lines) > 1:
+            df = pd.DataFrame(lines)
+            bio = BytesIO()
+            with pd.ExcelWriter(bio, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, header=False)
+            return bio.getvalue()
+    except: return None
+    return None
+
+# --- Shared AI Function (PDF & Image) ---
 def process_ai(file_path, is_image=False):
-    # Gemini 1.5 Flash သို့မဟုတ် 2.0 Flash ကို သုံးပါ (2.5 မရှိသေးပါ)
     llm = LLM(model="gemini/gemini-2.5-flash")
     
     if is_image:
-        content_desc = "ဓာတ်ပုံထဲက စာသားများကို ဖတ်ပြီး မြန်မာလို အနှစ်ချုပ်ပေးပါ"
-        # Gemini Multimodal ဖြစ်၍ ပုံကို တိုက်ရိုက်ယူနိုင်ရန် CrewAI Tool လိုအပ်နိုင်သော်လည်း 
-        # ဤနေရာတွင် ရိုးရှင်းအောင် စာသားဖြင့်သာ ဖော်ပြထားသည်
-        input_data = f"ဓာတ်ပုံဖိုင်လမ်းကြောင်း: {file_path}" 
+        input_data = f"ဓာတ်ပုံဖိုင်: {file_path}"
+        task_desc = "ဓာတ်ပုံထဲက စာသားများကို ဖတ်ပြီး အနှစ်ချုပ်ပါ။ ဇယားများပါလျှင် Markdown Table ဖြင့် ထုတ်ပေးပါ။"
     else:
         loader = PyPDFLoader(file_path)
         input_data = "\n".join([p.page_content for p in loader.load()])
+        task_desc = "PDF ထဲက အချက်အလက်များကို အနှစ်ချုပ်ပါ။ ဇယားများပါလျှင် Markdown Table format (| Column |) ဖြင့် သေချာစွာ ထုတ်ပေးပါ။"
     
     agent = Agent(
-        role='ကျွမ်းကျင်သုတေသနပညာရှင်',
-        goal='စာရွက်စာတမ်းနှင့် ပုံများကို မြန်မာလို အနှစ်ချုပ်ရန်',
-        backstory='သင်သည် PDF နှင့် ဓာတ်ပုံများထဲက အချက်အလက်များကို မြန်မာလို ကျွမ်းကျင်စွာ ဘာသာပြန်ဆို အနှစ်ချုပ်ပေးသူဖြစ်သည်။',
+        role='Data & Research Expert',
+        goal='စာရွက်စာတမ်းများနှင့် ပုံများထဲက အချက်အလက်နှင့် ဇယားများကို တိကျစွာ ထုတ်ယူရန်',
+        backstory='သင်သည် PDF နှင့် ဓာတ်ပုံများမှ Data များကို Excel ပုံစံအတိုင်း ပြန်လည်ထုတ်ယူပေးနိုင်သော ပညာရှင်ဖြစ်သည်။',
         llm=llm
     )
-    task = Task(description=f"အောက်ပါအချက်အလက်များကို မြန်မာလို အနှစ်ချုပ်ပါ: {input_data}", expected_output="မြန်မာလို စနစ်တကျ အနှစ်ချုပ်။", agent=agent)
+    task = Task(description=f"{task_desc}\n\nအချက်အလက်များ: {input_data}", expected_output="မြန်မာလို အနှစ်ချုပ်နှင့် ဇယားကွက်များ။", agent=agent)
     return str(Crew(agents=[agent], tasks=[task]).kickoff().raw)
 
 def get_docx(text):
@@ -53,7 +66,6 @@ def get_docx(text):
     doc.save(bio)
     return bio.getvalue()
 
-# --- Telegram Long Message Fix ---
 async def send_long_message(update, text):
     if len(text) <= 4000:
         await update.message.reply_text(text)
@@ -65,74 +77,70 @@ async def send_long_message(update, text):
 async def tg_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if update.message.document and update.message.document.mime_type == 'application/pdf':
-            # Typing Action ပြခြင်း
             await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=telegram.constants.ChatAction.TYPING)
-            await update.message.reply_text("PDF လက်ခံရရှိပါပြီ။ ခဏစောင့်ပေးပါ... 📄")
+            await update.message.reply_text("PDF လက်ခံရရှိပါပြီ။ ဇယားကွက်များနှင့် အချက်အလက်များကို ရှာဖွေနေပါသည်... 📄")
             
             f = await context.bot.get_file(update.message.document.file_id)
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t:
                 await f.download_to_drive(t.name)
                 res = process_ai(t.name, is_image=False)
                 
-                await update.message.reply_text("🔍 PDF အနှစ်ချုပ် ရလဒ် -")
-                await send_long_message(update, res)
-                await update.message.reply_document(document=BytesIO(get_docx(res)), filename="Research_Report.docx")
+                await send_long_message(update, f"🔍 ရလဒ်:\n\n{res}")
+                
+                # Word File ပို့ခြင်း
+                await update.message.reply_document(document=BytesIO(get_docx(res)), filename="Summary.docx")
+                
+                # Excel File ပို့ခြင်း (ဇယားပါလျှင်)
+                excel_data = get_excel(res)
+                if excel_data:
+                    await update.message.reply_document(document=BytesIO(excel_data), filename="Tables.xlsx", caption="ဇယားကွက်များကို Excel အဖြစ် ထုတ်ပေးထားပါသည်။")
+                
                 os.remove(t.name)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+    except Exception as e: await update.message.reply_text(f"Error: {str(e)}")
 
 # --- Telegram Image Handler ---
-async def tg_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def tg_img(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        # Typing Action ပြခြင်း
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=telegram.constants.ChatAction.TYPING)
-        await update.message.reply_text("ပုံကို လက်ခံရရှိပါပြီ။ စာသားများကို ဖတ်နေပါသည်... 📷")
+        await update.message.reply_text("ပုံကို လက်ခံရရှိပါပြီ။ စာသားများနှင့် ဇယားများကို ဖတ်နေပါသည်... 📷")
         
-        photo_file = await update.message.photo[-1].get_file()
+        photo = await update.message.photo[-1].get_file()
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as t:
-            await photo_file.download_to_drive(t.name)
+            await photo.download_to_drive(t.name)
             res = process_ai(t.name, is_image=True)
+            await send_long_message(update, f"📷 ပုံထဲက တွေ့ရှိချက်:\n\n{res}")
             
-            await update.message.reply_text("🔍 ပုံထဲက တွေ့ရှိချက် -")
-            await send_long_message(update, res)
+            excel_data = get_excel(res)
+            if excel_data:
+                await update.message.reply_document(document=BytesIO(excel_data), filename="Image_Table.xlsx")
             os.remove(t.name)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+    except Exception as e: await update.message.reply_text(f"Error: {str(e)}")
 
-# --- Main Bot Execution ---
+# --- Run Bot ---
 if __name__ == '__main__':
     token = os.environ.get("TELEGRAM_TOKEN")
-    
     if token:
-        application = ApplicationBuilder().token(token).build()
-        
-        # Handler များ ထည့်သွင်းခြင်း
-        application.add_handler(MessageHandler(filters.Document.PDF, tg_pdf))
-        application.add_handler(MessageHandler(filters.PHOTO, tg_image))
-        
-        # Bot ကို Background မှာ Run ရန် Thread သုံးခြင်း (Streamlit နှင့် တွဲသုံးရန်)
-        def start_polling():
-            application.run_polling(drop_pending_updates=True)
-        
-        threading.Thread(target=start_polling, daemon=True).start()
-        print("--- Bot is now LIVE with Image & PDF Support ---")
+        app = ApplicationBuilder().token(token).build()
+        app.add_handler(MessageHandler(filters.Document.PDF, tg_pdf))
+        app.add_handler(MessageHandler(filters.PHOTO, tg_img))
+        threading.Thread(target=app.run_polling, kwargs={"drop_pending_updates": True}, daemon=True).start()
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="AI Research Agent", page_icon="🔍")
-st.title("🔍 Web + Telegram AI Agent")
-st.info("Telegram Bot တွင်လည်း PDF နှင့် ပုံများ ပို့နိုင်ပါသည်။")
+st.title("🔍 Web + Telegram AI Data Agent")
+st.markdown("PDF နှင့် ပုံများမှ **မြန်မာလိုအနှစ်ချုပ်၊ Word နှင့် Excel** တို့ကို တစ်ခါတည်း ထုတ်ပေးပါသည်။")
 
 key = st.sidebar.text_input("Gemini API Key", type="password")
-if key: os.environ["GOOGLE_API_KEY"] = key
-
-up = st.file_uploader("PDF တင်ပါ", type=["pdf"])
-if up and key:
-    if st.button("သုတေသန စတင်ပါ"):
-        with st.spinner("Processing..."):
+if key:
+    os.environ["GOOGLE_API_KEY"] = key
+    up = st.file_uploader("PDF တင်ပါ", type=["pdf"])
+    if up and st.button("သုတေသန စတင်ပါ"):
+        with st.spinner("ဇယားများနှင့် အချက်အလက်များကို ထုတ်ယူနေသည်..."):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t:
                 t.write(up.getvalue())
                 res = process_ai(t.name)
                 st.success("ပြီးပါပြီ!")
                 st.write(res)
-                st.download_button("📥 Word File", data=get_docx(res), file_name="report.docx")
+                st.download_button("📥 Word Report", data=get_docx(res), file_name="report.docx")
+                excel = get_excel(res)
+                if excel: st.download_button("📊 Excel Tables", data=excel, file_name="tables.xlsx")
                 os.remove(t.name)
