@@ -31,7 +31,7 @@ if uploaded_file and google_api_key:
                 pdf_content = "\n".join([page.page_content for page in pages])
 
                 # ၂။ CrewAI Setup
-                gemini_llm = LLM(model="gemini/gemini-1.5-flash")
+                gemini_llm = LLM(model="gemini/gemini-2.5-flash")
 
                 analyst = Agent(
                     role='စာရွက်စာတမ်း ကျွမ်းကျင်သူ',
@@ -62,4 +62,5 @@ if uploaded_file and google_api_key:
             except Exception as e:
                 st.error(f"Error တက်သွားပါသည်: {e}")
 else:
+
     st.info("အပေါ်က အကွက်မှာ PDF တင်ပြီး ဘေးက Sidebar မှာ API Key ထည့်ပေးပါ။")
