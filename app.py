@@ -25,7 +25,7 @@ threading.Thread(target=run_flask, daemon=True).start()
 # --- ၂။ AI Processing Function ---
 def process_research(pdf_path):
     # gemini-1.5-flash ကို အသုံးပြုပါ (2.5 မရှိသေးပါ)
-    llm = LLM(model="gemini/gemini-1.5-flash")
+    llm = LLM(model="gemini/gemini-2.5-flash")
     loader = PyPDFLoader(pdf_path)
     content = "\n".join([p.page_content for p in loader.load()])
     
@@ -85,3 +85,4 @@ if up and key:
                 st.write(res)
                 st.download_button("📥 Word File", data=get_docx(res), file_name="report.docx")
                 os.remove(t.name)
+
