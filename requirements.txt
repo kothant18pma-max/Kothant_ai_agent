@@ -1,8 +1,10 @@
 streamlit
+flask
 crewai
 langchain-google-genai
 langchain-community
 crewai[tools]
 pypdf
 python-docx
+
 
