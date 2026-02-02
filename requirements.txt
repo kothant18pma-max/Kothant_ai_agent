@@ -6,3 +6,4 @@ langchain-google-genai
 langchain-community
 pypdf
 python-docx
+Pillow
