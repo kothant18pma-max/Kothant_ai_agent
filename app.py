@@ -1,3 +1,29 @@
+from flask import Flask
+import threading
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "I'm alive!"
+
+def run():
+    app.run(host='0.0.0.0', port=10000)
+
+# Bot code မစခင် ဒါလေးကို run ပေးပါ
+threading.Thread(target=run).start()
+# ပြီးမှ သင့်ရဲ့ Telegram Bot logic တွေကို ဆက်ရေးပါ
+async def handle_pdf(update, context):
+    # ... သင့်ရဲ့ PDF processing code များ ...
+    pass
+
+if __name__ == '__main__':
+    # Telegram Bot ကို စနှိုးခြင်း
+    token = os.getenv("TELEGRAM_TOKEN")
+    application = ApplicationBuilder().token(token).build()
+    # ... handler များ ထည့်ခြင်း ...
+    application.run_polling()
+
 import streamlit as st
 import os
 from crewai import Agent, Task, Crew, LLM
@@ -75,3 +101,4 @@ if uploaded_file and google_key:
             )
             
             os.remove(tmp_path)
+
