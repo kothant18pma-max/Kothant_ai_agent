@@ -1,14 +1,27 @@
-
-import streamlit as st
 import os
-from crewai import Agent, Task, Crew, LLM
-from crewai_tools import SerperDevTool
-from langchain_community.document_loaders import PyPDFLoader
+import threading
 import tempfile
+from flask import Flask
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from crewai import Agent, Task, Crew, LLM
+from langchain_community.document_loaders import PyPDFLoader
 from docx import Document
 from io import BytesIO
 
-# --- Word File ထုတ်ပေးသည့် Function ---
+# --- ၁။ Flask Keep-Alive (Render အတွက်) ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "AI Bot is alive!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=10000)
+
+threading.Thread(target=run_flask, daemon=True).start()
+
+# --- ၂။ Word File Function ---
 def create_word_file(content):
     doc = Document()
     doc.add_heading('AI Research Report', 0)
@@ -17,64 +30,64 @@ def create_word_file(content):
     doc.save(bio)
     return bio.getvalue()
 
-st.set_page_config(page_title="AI Researcher", layout="wide")
-st.title("🔍 Advanced AI Researcher (PDF + Web)")
-
-# Sidebar for API Keys
-with st.sidebar:
-    st.header("API Configuration")
-    google_key = st.text_input("Google API Key", type="password")
-    serper_key = st.text_input("Serper API Key", type="password")
-    
-    if google_key: os.environ["GOOGLE_API_KEY"] = google_key
-    if serper_key: os.environ["SERPER_API_KEY"] = serper_key
-
-uploaded_file = st.file_uploader("သုတေသနပြုမည့် PDF တင်ပါ", type=["pdf"])
-
-if uploaded_file and google_key:
-    if st.button("သုတေသန စတင်ပါ"):
-        with st.spinner("Agent များ အလုပ်လုပ်နေပါပြီ..."):
-            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                tmp_file.write(uploaded_file.getvalue())
-                tmp_path = tmp_file.name
-
-            loader = PyPDFLoader(tmp_path)
-            pages = loader.load_and_split()
-            pdf_content = "\n".join([page.page_content for page in pages])
-
-            search_tool = SerperDevTool()
-            gemini_llm = LLM(model="gemini/gemini-2.5-flash")
-
+# --- ၃။ Telegram Bot Logic ---
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.document.mime_type == 'application/pdf':
+        await update.message.reply_text("PDF ဖိုင် ရပါပြီ။ သုတေသန လုပ်နေပါပြီ...")
+        
+        file = await context.bot.get_file(update.message.document.file_id)
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            await file.download_to_drive(tmp.name)
+            
+            # AI Processing
+            loader = PyPDFLoader(tmp.name)
+            pdf_content = "\n".join([p.page_content for p in loader.load()])
+            
+            # Gemini LLM Setup (gemini-1.5-flash ကို သုံးပါ)
+            gemini_llm = LLM(model="gemini/gemini-1.5-flash")
+            
             researcher = Agent(
                 role='ဝါရင့် သုတေသီ',
-                goal='PDF နှင့် အင်တာနက် သတင်းများကို နှိုင်းယှဉ်လေ့လာရန်',
-                backstory='သင်သည် တိကျသော သုတေသန အစီရင်ခံစာများ ရေးသားသူဖြစ်သည်။',
-                tools=[search_tool],
+                goal='PDF အချက်အလက်များကို မြန်မာလို အနှစ်ချုပ်ရန်',
+                backstory='သင်သည် တိကျသော အစီရင်ခံစာများ ရေးသားသူဖြစ်သည်။',
                 llm=gemini_llm
             )
-
+            
             task = Task(
-                description=f"ပေးထားသော PDF ကိုဖတ်ပါ: {pdf_content}။ ၎င်းနှင့်ပတ်သက်သော နောက်ဆုံးရသတင်းများကို ရှာဖွေပြီး မြန်မာလို အနှစ်ချုပ်ပေးပါ။",
-                expected_output="ပြည့်စုံသော မြန်မာလို သုတေသန မှတ်တမ်း။",
+                description=f"အောက်ပါစာသားများကို မြန်မာလို အနှစ်ချုပ်ပါ: {pdf_content}",
+                expected_output="ပြည့်စုံသော မြန်မာလို သုတေသန အစီရင်ခံစာ။",
                 agent=researcher
             )
-
+            
             crew = Crew(agents=[researcher], tasks=[task])
             result = crew.kickoff()
-
-            # --- ရလဒ်ပြသခြင်းနှင့် Download ခလုတ် ---
-            st.success("သုတေသန ပြီးစီးပါပြီ!")
-            st.markdown(result.raw)
             
-            # Word file ဖန်တီးပြီး Download Button ပြခြင်း
-            docx_data = create_word_file(str(result.raw))
-            st.download_button(
-                label="📥 Word File (DOCX) အဖြစ် ဒေါင်းလုဒ်ဆွဲပါ",
-                data=docx_data,
-                file_name="research_report.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            # စာသားပြန်ပို့ခြင်း
+            summary_text = str(result.raw)
+            await update.message.reply_text(f"🔍 ရလဒ်:\n\n{summary_text}")
+            
+            # Word File ပြန်ပို့ခြင်း
+            docx_data = create_word_file(summary_text)
+            await update.message.reply_document(
+                document=BytesIO(docx_data),
+                filename="Research_Report.docx"
             )
             
-            os.remove(tmp_path)
+            os.remove(tmp.name)
+    else:
+        await update.message.reply_text("PDF ဖိုင်ကိုသာ ပို့ပေးပါ။")
 
-
+# --- ၄။ Main Execution ---
+if __name__ == '__main__':
+    # Render Environment Variables ထဲက Key တွေကို ယူပါ
+    token = os.getenv("TELEGRAM_TOKEN")
+    
+    if not token:
+        print("Error: TELEGRAM_TOKEN not found!")
+    else:
+        app_bot = ApplicationBuilder().token(token).build()
+        app_bot.add_handler(MessageHandler(filters.Document.PDF, handle_document))
+        
+        print("Bot is starting...")
+        app_bot.run_polling()
