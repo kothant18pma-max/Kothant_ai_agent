@@ -67,11 +67,39 @@ if __name__ == '__main__':
         # ၂။ Application ကို တည်ဆောက်ပါ
         application = ApplicationBuilder().token(token).build()
         
-        # ၃။ PDF Handler ကို ထည့်ပါ (filters.Document.PDF သေချာပါစေ)
-        pdf_handler = MessageHandler(filters.Document.PDF, tg_msg)
-        application.add_handler(pdf_handler)
-        
-        print("--- Bot is now LIVE and Polling ---")
+        # စာသားများကို အပိုင်းလိုက်ခွဲပို့ရန် function
+async def send_long_message(update, text):
+    if len(text) <= 4000:
+        await update.message.reply_text(text)
+    else:
+        # စာလုံးရေ ၄၀၀၀ စီ ခွဲထုတ်ပြီး ပို့ပေးခြင်း
+        for i in range(0, len(text), 4000):
+            await update.message.reply_text(text[i:i+4000])
+
+# သင့်ရဲ့ မူလ handler ကို ဒီလို ပြင်လိုက်ပါ
+async def tg_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.message.document and update.message.document.mime_type == 'application/pdf':
+            await update.message.reply_text("PDF လက်ခံရရှိပါပြီ။ ခဏစောင့်ပေးပါ...")
+            
+            f = await context.bot.get_file(update.message.document.file_id)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t:
+                await f.download_to_drive(t.name)
+                res = process_ai(t.name) # AI processing လုပ်တဲ့နေရာ
+                
+                # အနှစ်ချုပ်စာသားကို ခွဲပို့မည်
+                await update.message.reply_text("🔍 သုတေသန အနှစ်ချုပ် ရလဒ် -")
+                await send_long_message(update, res)
+                
+                # Word file ပြန်ပို့ခြင်း (Word file ကတော့ Message long ဖြစ်လည်း ပြဿနာမရှိပါ)
+                docx_data = get_docx(res)
+                await update.message.reply_document(
+                    document=BytesIO(docx_data), 
+                    filename="AI_Research_Report.docx"
+                )
+                os.remove(t.name)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
         
         # ၄။ ပိုမိုမြန်ဆန်စွာ အလုပ်လုပ်စေရန် polling ကို run ပါ
         application.run_polling(drop_pending_updates=True)
@@ -107,5 +135,6 @@ if up and key:
                 st.write(res)
                 st.download_button("📥 Word File", data=get_docx(res), file_name="report.docx")
                 os.remove(t.name)
+
 
 
