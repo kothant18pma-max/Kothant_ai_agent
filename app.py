@@ -76,6 +76,21 @@ if __name__ == '__main__':
         # ၄။ ပိုမိုမြန်ဆန်စွာ အလုပ်လုပ်စေရန် polling ကို run ပါ
         application.run_polling(drop_pending_updates=True)
 
+if __name__ == '__main__':
+    # Environment variable ကို ဖတ်ပါ
+    token = os.environ.get("TELEGRAM_TOKEN")
+    
+    if token is None or token == "":
+        print("CRITICAL ERROR: TELEGRAM_TOKEN is missing in Environment Variables!")
+        # Flask server သာ Run ထားပြီး Bot ကို မနှိုးပါနဲ့
+    else:
+        print(f"Token found: {token[:5]}***") # Token ရှိကြောင်း အတည်ပြုရန် (လုံခြုံရေးအရ အရှေ့ ၅ လုံးပဲပြပါမည်)
+        application = ApplicationBuilder().token(token).build()
+        application.add_handler(MessageHandler(filters.Document.PDF, tg_msg))
+        
+        print("--- Bot is now LIVE and Polling ---")
+        application.run_polling(drop_pending_updates=True)
+
 # --- Streamlit UI ---
 st.title("🔍 Web + Telegram AI Agent")
 key = st.sidebar.text_input("Gemini API Key", type="password")
@@ -92,4 +107,5 @@ if up and key:
                 st.write(res)
                 st.download_button("📥 Word File", data=get_docx(res), file_name="report.docx")
                 os.remove(t.name)
+
 
