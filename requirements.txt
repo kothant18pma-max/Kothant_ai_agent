@@ -2,4 +2,6 @@ streamlit
 crewai
 langchain-google-genai
 langchain-community
+crewai[tools]
 pypdf
+
