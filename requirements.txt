@@ -7,3 +7,5 @@ langchain-community
 pypdf
 python-docx
 Pillow
+pandas
+openpyxl
