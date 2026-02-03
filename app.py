@@ -23,7 +23,7 @@ def run_flask():
 # --- ၂။ Smart AI & OCR Logic ---
 def process_smart_ai(file_path):
     genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     
     uploaded_file = genai.upload_file(path=file_path)
     
@@ -124,3 +124,4 @@ if __name__ == '__main__':
         app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_media))
         print("--- Smart OCR Bot with Audio is LIVE ---")
         app.run_polling(drop_pending_updates=True)
+
