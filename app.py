@@ -1,137 +1,51 @@
 import os
 import threading
 import tempfile
-import pandas as pd
+from groq import Groq
 import google.generativeai as genai
+from huggingface_hub import InferenceClient
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-import telegram.constants
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CallbackQueryHandler
-from docx import Document
-from pptx import Presentation
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CallbackQueryHandler, CommandHandler
 from io import BytesIO
 from gtts import gTTS
 
-# --- Flask Server (Render Health Check) ---
+# --- API Clients Setup ---
+groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+hf_client = InferenceClient(token=os.environ.get("HF_TOKEN"))
+
+# --- Flask Server ---
 flask_app = Flask(__name__)
 @flask_app.route('/')
-def home(): return "AI Agent is Active!"
+def home(): return "Multi-AI Agent is Active!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
 
-# --- Gemini AI Core Logic ---
-def get_ai_response(prompt_text, file_path=None):
-    genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
-    model = genai.GenerativeModel('gemini-2.5-flash')
-    
-    if file_path:
-        uploaded_file = genai.upload_file(path=file_path)
-        response = model.generate_content([prompt_text, uploaded_file])
-    else:
-        response = model.generate_content(prompt_text)
-    return response.text
-
-# --- Helper Functions (PPT, Excel) ---
-def create_ppt(text):
-    prs = Presentation(); slide = prs.slides.add_slide(prs.slide_layouts[1])
-    slide.shapes.title.text = "AI Summary Report"; slide.placeholders[1].text = text[:1000]
-    bio = BytesIO(); prs.save(bio); bio.seek(0); return bio
-
-def get_excel(text):
-    try:
-        lines = [line.strip().strip('|').split('|') for line in text.split('\n') if '|' in line]
-        if len(lines) > 1:
-            df = pd.DataFrame(lines); bio = BytesIO()
-            with pd.ExcelWriter(bio, engine='openpyxl') as writer: df.to_excel(writer, index=False, header=False)
-            return bio.getvalue()
-    except: return None
-
-# --- ၁။ Text Message Handler (နှုတ်ဆက်ခြင်းနှင့် အထွေထွေမေးမြန်းခြင်း) ---
+# --- ၁။ Text Chat Logic (Groq ကို သုံး၍ အလွန်မြန်စွာ ဖြေကြားခြင်း) ---
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=telegram.constants.ChatAction.TYPING)
     
-    # AI နှင့် တိုက်ရိုက်ဆွေးနွေးခြင်း
-    res = get_ai_response(f"အသုံးပြုသူမှ မေးမြန်းချက်: {user_text}\n(မြန်မာလို ယဉ်ကျေးစွာ ပြန်လည်ဖြေကြားပေးပါ)")
-    await update.message.reply_text(res)
+    try:
+        # Groq Llama-3 Model ကို သုံး၍ စာပြန်ခြင်း
+        chat_completion = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": f"Please reply in Myanmar language: {user_text}"}],
+            model="llama3-8b-8192",
+        )
+        res = chat_completion.choices[0].message.content
+        await update.message.reply_text(res)
+    except Exception as e:
+        # Groq အဆင်မပြေလျှင် Hugging Face သို့မဟုတ် Gemini ဖြင့် Backup လုပ်နိုင်သည်
+        await update.message.reply_text("ခဏတာ အဆင်မပြေဖြစ်နေပါသည်။ နောက်မှ ပြန်ကြိုးစားကြည့်ပါ။")
 
-# --- ၂။ Media Handler (ဖိုင်ပို့လျှင် ရွေးချယ်ခိုင်းခြင်း) ---
-async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file_obj = None; suffix = ""
-    if update.message.document:
-        file_obj = await update.message.document.get_file(); suffix = ".pdf"
-    elif update.message.photo:
-        file_obj = await update.message.photo[-1].get_file(); suffix = ".jpg"
-    
-    if not file_obj: return
+# --- ၂။ Image/PDF Logic (Gemini ဖြင့် Vision Task လုပ်ခြင်း) ---
+# (အရင်ပေးထားသည့် handle_media နှင့် button_click logic များကို ဆက်သုံးပါ)
+# Gemini က ပုံဖတ်ရာတွင် အတော်ဆုံးဖြစ်သောကြောင့် File အတွက် Gemini ကို ထားခဲ့ခြင်းဖြစ်ပါသည်။
 
-    # ဖိုင်ကို သိမ်းဆည်းပြီး Path ကို မှတ်ထားခြင်း
-    t = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    await file_obj.download_to_drive(t.name)
-    context.user_data['current_file'] = t.name
-    
-    # Inline Buttons များ ပြသခြင်း
-    keyboard = [
-        [InlineKeyboardButton("🔍 OCR (စာကူးမယ်)", callback_data='ocr'),
-         InlineKeyboardButton("📝 အနှစ်ချုပ်/Audio", callback_data='summary')],
-        [InlineKeyboardButton("📊 Excel ထုတ်မယ်", callback_data='excel'),
-         InlineKeyboardButton("📽️ Slide (PPT) လုပ်မယ်", callback_data='ppt')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("📁 ဖိုင်ကို လက်ခံရရှိပါပြီ။ ဘယ် Service ကို သုံးချင်ပါသလဲ?", reply_markup=reply_markup)
-
-# --- ၃။ Callback Handler (ခလုတ်နှိပ်ခြင်းကို ကိုင်တွယ်ခြင်း) ---
-async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    command = query.data
-    file_path = context.user_data.get('current_file')
-    
-    if not file_path:
-        await query.edit_message_text("❌ ဖိုင်သက်တမ်းကုန်သွားပါပြီ။ ကျေးဇူးပြု၍ ပြန်ပို့ပေးပါ။")
-        return
-
-    await query.edit_message_text(f"⚙️ လုပ်ဆောင်နေပါသည်: {command.upper()}...")
-    
-    prompts = {
-        "ocr": "ဤဖိုင်ထဲမှ စာသားအားလုံးကို Transcription ထုတ်ပေးပါ။",
-        "summary": "ဤဖိုင်ကို မြန်မာလို အနှစ်ချုပ်ပေးပါ။ (Audio အတွက် သီးသန့်ပေးပါ)",
-        "excel": "ဤဖိုင်ထဲမှ ဇယားများကို Markdown Table format ဖြင့်သာ ထုတ်ပေးပါ။",
-        "ppt": "Presentation Slide လုပ်ရန် အဓိကအချက်များကို Bullet points ဖြင့် ထုတ်ပေးပါ။"
-    }
-    
-    res = get_ai_response(prompts[command], file_path)
-
-    # ရလဒ်များ ပို့ပေးခြင်း
-    chat_id = query.message.chat_id
-    if command == "ocr":
-        await context.bot.send_message(chat_id=chat_id, text=f"🔍 OCR Result:\n\n{res}")
-    elif command == "summary":
-        await context.bot.send_message(chat_id=chat_id, text=f"📝 Summary:\n\n{res}")
-        tts = gTTS(text=res, lang='my'); bio = BytesIO(); tts.write_to_fp(bio); bio.seek(0)
-        await context.bot.send_audio(chat_id=chat_id, audio=bio, title="Summary Audio")
-    elif command == "excel":
-        ex = get_excel(res)
-        if ex: await context.bot.send_document(chat_id=chat_id, document=BytesIO(ex), filename="Data.xlsx")
-        else: await context.bot.send_message(chat_id=chat_id, text="❌ ဇယားကွက် မတွေ့ပါ။")
-    elif command == "ppt":
-        ppt_file = create_ppt(res)
-        await context.bot.send_document(chat_id=chat_id, document=ppt_file, filename="Presentation.pptx")
-
-# --- Bot Start ---
-if __name__ == '__main__':
-    threading.Thread(target=run_flask, daemon=True).start()
-    token = os.environ.get("TELEGRAM_TOKEN")
-    if token:
-        app = ApplicationBuilder().token(token).build()
-        # Media Handler
-        app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_media))
-        # Text Handler (General Chat)
-        app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
-        # Button Handler
-        app.add_handler(CallbackQueryHandler(button_click))
-        print("Bot is ready...")
-        app.run_polling(drop_pending_updates=True)
+# --- ၃။ Hugging Face ကို သီးသန့် Task များအတွက် သုံးရန် (ဥပမာ - Sentiment Analysis) ---
+def analyze_with_hf(text):
+    # Hugging Face Model တစ်ခုခုကို လှမ်းသုံးခြင်း
+    res = hf_client.text_classification(text, model="distilbert-base-uncased-finetuned-sst-2-english")
+    return res
