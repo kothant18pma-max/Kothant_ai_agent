@@ -23,7 +23,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
 
-# --- ၂။ AI Processing Functions (PDF, Image, Word, Excel) ---
+# --- ၂။ AI Processing Functions ---
 def get_excel(text):
     try:
         lines = [line.strip().strip('|').split('|') for line in text.split('\n') if '|' in line]
@@ -51,30 +51,30 @@ def process_ai(file_path, is_image=False):
 
 # --- ၃။ Telegram Handler Logic ---
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.document.mime_type == 'application/pdf':
+    if update.message.document and update.message.document.mime_type == 'application/pdf':
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=telegram.constants.ChatAction.TYPING)
-        await update.message.reply_text("PDF လက်ခံရရှိပါပြီ။ ခဏစောင့်ပေးပါ... 📄")
+        await update.message.reply_text("PDF လက်ခံရရှိပါပြီ။ တွက်ချက်နေပါသည်... 📄")
         
         f = await context.bot.get_file(update.message.document.file_id)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t:
             await f.download_to_drive(t.name)
             res = process_ai(t.name)
             
-            # စာသားအပိုင်းလိုက်ပို့ခြင်း
+            # စာသားအပိုင်းလိုက်ပို့ခြင်း (Long Message Fix)
             for i in range(0, len(res), 4000):
                 await update.message.reply_text(res[i:i+4000])
             
-            # File များပြန်ပို့ခြင်း
+            # Word & Excel ပြန်ပို့ခြင်း
             doc_bio = BytesIO(); doc = Document(); doc.add_paragraph(res); doc.save(doc_bio)
             await update.message.reply_document(document=BytesIO(doc_bio.getvalue()), filename="Report.docx")
             
             ex = get_excel(res)
-            if ex: await update.message.reply_document(document=BytesIO(ex), filename="Tables.xlsx")
+            if ex: await update.message.reply_document(document=BytesIO(ex), filename="Data_Table.xlsx")
             os.remove(t.name)
 
 # --- ၄။ Main Execution Block ---
 if __name__ == '__main__':
-    # Flask ကို Background မှာ အရင်ဆုံးနှိုးပါ (Render Health Check အောင်မြင်ရန်)
+    # Flask ကို Background မှာ အရင်ဆုံးနှိုးပါ (Render Healthy ဖြစ်စေရန်)
     threading.Thread(target=run_flask, daemon=True).start()
     
     token = os.environ.get("TELEGRAM_TOKEN")
@@ -82,4 +82,5 @@ if __name__ == '__main__':
         # Bot ကို Polling စနစ်ဖြင့် Run ပါ
         application = ApplicationBuilder().token(token).build()
         application.add_handler(MessageHandler(filters.Document.PDF, handle_document))
+        print("Bot is starting...")
         application.run_polling(drop_pending_updates=True)
