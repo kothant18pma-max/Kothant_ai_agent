@@ -12,4 +12,6 @@ openpyxl
 google-generativeai
 gTTS
 python-pptx
+groq
+huggingface_hub
 
