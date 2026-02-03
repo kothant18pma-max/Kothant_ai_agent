@@ -1,91 +1,66 @@
-import os
-import threading
-import tempfile
-import pandas as pd
-import google.generativeai as genai
-from flask import Flask
-from telegram import Update
-import telegram.constants
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
-from docx import Document
-from io import BytesIO
-
-# --- Flask Server ---
-flask_app = Flask(__name__)
-@flask_app.route('/')
-def home(): return "Bot is Healthy!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host='0.0.0.0', port=port)
-
-# --- Gemini Multimodal Logic ---
-def process_with_gemini(file_path, is_image=True):
+# --- Smart AI Logic (OCR ပိုမိုကောင်းမွန်အောင် ပြင်ဆင်ထားသည်) ---
+def process_smart_ai(file_path):
     genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
     model = genai.GenerativeModel('gemini-2.5-flash')
     
-    # ဖိုင်ကို Gemini ဆီသို့ တိုက်ရိုက် Upload တင်ခြင်း
-    sample_file = genai.upload_file(path=file_path)
+    uploaded_file = genai.upload_file(path=file_path)
     
+    # Prompt ကို OCR ပုံစံသို့ ဦးတည်စေခြင်း
     prompt = """
-    ဤဖိုင်ထဲတွင်ပါဝင်သော အချက်အလက်များကို အသေးစိတ်ဖတ်ပါ။ 
-    ၁။ စာသားအားလုံးကို မြန်မာလို အနှစ်ချုပ်ပေးပါ။
-    ၂။ ဇယားများ (Tables) ပါဝင်ပါက Markdown Table format (| Column |) ဖြင့် တိကျစွာ ထုတ်ပေးပါ။
-    ၃။ ကိန်းဂဏန်းအချက်အလက်များကို မလွဲမချော်အောင် အထူးဂရုစိုက်ပါ။
+    ဤဖိုင်ကို အသေးစိတ် ကြည့်ရှုပါ။
+    ၁။ အကယ်၍ ဤဖိုင်သည် အချက်အလက် မရှိသော ပုံ (သို့မဟုတ်) ဖတ်မရသော ဖိုင်ဖြစ်ပါက 'DATA_INSUFFICIENT' ဟုသာ ရေးပါ။
+    ၂။ အချက်အလက် ရှိပါက အောက်ပါအတိုင်း အဆင့်ဆင့် လုပ်ဆောင်ပါ -
+       - [OCR Section]: ဖိုင်ထဲတွင် ပါဝင်သော စာသားအားလုံးကို မူရင်းအတိုင်း (Transcription) တစ်လုံးမကျန် အရင်ဆုံး ပြန်ထုတ်ပေးပါ။
+       - [Summary Section]: ထိုစာသားများကို မြန်မာလို အနှစ်ချုပ်ပေးပါ။
+       - [Translation Section]: အရေးကြီးသော အချက်များကို မြန်မာလို ဘာသာပြန်ပေးပါ။
+       - [Table Section]: ဇယားများပါပါက Markdown Table format (| Col |) ဖြင့် သေချာစွာ ထုတ်ပေးပါ။
     """
     
-    response = model.generate_content([prompt, sample_file])
+    response = model.generate_content([prompt, uploaded_file])
     return response.text
 
-# --- Excel Logic ---
-def get_excel(text):
-    try:
-        lines = [line.strip().strip('|').split('|') for line in text.split('\n') if '|' in line]
-        if len(lines) > 1:
-            df = pd.DataFrame(lines)
-            bio = BytesIO()
-            with pd.ExcelWriter(bio, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False, header=False)
-            return bio.getvalue()
-    except: return None
-
-# --- Telegram Handlers ---
+# --- Telegram Handler (OCR Result ကို ကိုင်တွယ်ရန်) ---
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=telegram.constants.ChatAction.TYPING)
         
-        # PDF သို့မဟုတ် ပုံ ဖြစ်မဖြစ် စစ်ဆေးခြင်း
-        if update.message.document and update.message.document.mime_type == 'application/pdf':
+        file_obj = None
+        suffix = ""
+        # PDF ရော ပုံရော လက်ခံရန်
+        if update.message.document:
             file_obj = await update.message.document.get_file()
             suffix = ".pdf"
-            msg = "PDF ဖတ်နေပါသည်..."
         elif update.message.photo:
             file_obj = await update.message.photo[-1].get_file()
             suffix = ".jpg"
-            msg = "ပုံထဲက Data များကို ဖတ်နေပါသည်..."
-        else: return
-
-        await update.message.reply_text(f"{msg} 🔍")
         
+        if not file_obj: return
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
             await file_obj.download_to_drive(t.name)
-            # Gemini ဖြင့် တိုက်ရိုက်ဖတ်ခြင်း
-            res = process_with_gemini(t.name)
+            res = process_smart_ai(t.name)
             
-            for i in range(0, len(res), 4000): 
-                await update.message.reply_text(res[i:i+4000])
+            if "DATA_INSUFFICIENT" in res:
+                await update.message.reply_text("⚠️ ဤဖိုင်တွင် ဖတ်ရန်စာသား သို့မဟုတ် အချက်အလက် မရှိပါ။")
+            else:
+                # OCR ရလဒ်နှင့် အနှစ်ချုပ်ကို အပိုင်းလိုက်ခွဲပို့ခြင်း (Long Message Fix)
+                for i in range(0, len(res), 4000):
+                    await update.message.reply_text(res[i:i+4000])
+                
+                # Word File အဖြစ် သိမ်းဆည်းနိုင်ရန် ပြုလုပ်ပေးခြင်း
+                doc_bio = BytesIO()
+                doc = Document()
+                doc.add_heading('OCR & AI Research Report', 0)
+                doc.add_paragraph(res)
+                doc.save(doc_bio)
+                await update.message.reply_document(document=BytesIO(doc_bio.getvalue()), filename="Full_OCR_Report.docx")
+                
+                # ဇယားပါက Excel ထုတ်ပေးခြင်း
+                ex = get_excel(res)
+                if ex:
+                    await update.message.reply_document(document=BytesIO(ex), filename="Extracted_Tables.xlsx")
             
-            ex = get_excel(res)
-            if ex: await update.message.reply_document(document=BytesIO(ex), filename="Extracted_Data.xlsx")
             os.remove(t.name)
             
-    except Exception as e: await update.message.reply_text(f"Error: {str(e)}")
-
-if __name__ == '__main__':
-    threading.Thread(target=run_flask, daemon=True).start()
-    token = os.environ.get("TELEGRAM_TOKEN")
-    if token:
-        app = ApplicationBuilder().token(token).build()
-        # PDF နှင့် ပုံ နှစ်ခုလုံးကို Handler တစ်ခုတည်းဖြင့် ကိုင်တွယ်ခြင်း
-        app.add_handler(MessageHandler(filters.Document.PDF | filters.PHOTO, handle_media))
-        app.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
