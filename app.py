@@ -12,36 +12,31 @@ from pptx import Presentation
 from io import BytesIO
 from gtts import gTTS
 
-# --- Flask Server ---
+# --- Flask Server (Render Health Check) ---
 flask_app = Flask(__name__)
 @flask_app.route('/')
-def home(): return "Interactive AI Agent is Running!"
+def home(): return "AI Agent is Active!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
 
-# --- AI Logic ---
-def get_ai_response(file_path, command_type):
+# --- Gemini AI Core Logic ---
+def get_ai_response(prompt_text, file_path=None):
     genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
     model = genai.GenerativeModel('gemini-2.5-flash')
-    uploaded_file = genai.upload_file(path=file_path)
     
-    prompts = {
-        "ocr": "ဤဖိုင်ထဲမှ စာသားအားလုံးကို တစ်လုံးမကျန် Transcription ထုတ်ပေးပါ။",
-        "summary": "ဤဖိုင်ကို မြန်မာလို အနှစ်ချုပ်နှင့် ဘာသာပြန်ပေးပါ။ (Audio အတွက် သီးသန့်ပေးပါ)",
-        "excel": "ဤဖိုင်ထဲမှ ဇယားများကို Markdown Table format ဖြင့်သာ ထုတ်ပေးပါ။",
-        "ppt": "Presentation Slide လုပ်ရန်အတွက် အဓိကအချက်များကို Bullet points များဖြင့် ထုတ်ပေးပါ။"
-    }
-    
-    response = model.generate_content([prompts[command_type], uploaded_file])
+    if file_path:
+        uploaded_file = genai.upload_file(path=file_path)
+        response = model.generate_content([prompt_text, uploaded_file])
+    else:
+        response = model.generate_content(prompt_text)
     return response.text
 
-# --- Helper Functions (PPT, Excel, Audio) ---
+# --- Helper Functions (PPT, Excel) ---
 def create_ppt(text):
     prs = Presentation(); slide = prs.slides.add_slide(prs.slide_layouts[1])
-    slide.shapes.title.text = "AI Data Summary"
-    slide.placeholders[1].text = text[:1000]
+    slide.shapes.title.text = "AI Summary Report"; slide.placeholders[1].text = text[:1000]
     bio = BytesIO(); prs.save(bio); bio.seek(0); return bio
 
 def get_excel(text):
@@ -53,7 +48,16 @@ def get_excel(text):
             return bio.getvalue()
     except: return None
 
-# --- Telegram Media Handler ---
+# --- ၁။ Text Message Handler (နှုတ်ဆက်ခြင်းနှင့် အထွေထွေမေးမြန်းခြင်း) ---
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=telegram.constants.ChatAction.TYPING)
+    
+    # AI နှင့် တိုက်ရိုက်ဆွေးနွေးခြင်း
+    res = get_ai_response(f"အသုံးပြုသူမှ မေးမြန်းချက်: {user_text}\n(မြန်မာလို ယဉ်ကျေးစွာ ပြန်လည်ဖြေကြားပေးပါ)")
+    await update.message.reply_text(res)
+
+# --- ၂။ Media Handler (ဖိုင်ပို့လျှင် ရွေးချယ်ခိုင်းခြင်း) ---
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_obj = None; suffix = ""
     if update.message.document:
@@ -63,22 +67,22 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not file_obj: return
 
-    # ဖိုင်ကို ခေတ္တသိမ်းပြီး Path ကို Context ထဲမှာ မှတ်ထားခြင်း
+    # ဖိုင်ကို သိမ်းဆည်းပြီး Path ကို မှတ်ထားခြင်း
     t = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     await file_obj.download_to_drive(t.name)
     context.user_data['current_file'] = t.name
     
-    # ခလုတ်များ ပြသခြင်း
+    # Inline Buttons များ ပြသခြင်း
     keyboard = [
-        [InlineKeyboardButton("🔍 OCR ဖတ်မယ်", callback_data='ocr'),
+        [InlineKeyboardButton("🔍 OCR (စာကူးမယ်)", callback_data='ocr'),
          InlineKeyboardButton("📝 အနှစ်ချုပ်/Audio", callback_data='summary')],
         [InlineKeyboardButton("📊 Excel ထုတ်မယ်", callback_data='excel'),
          InlineKeyboardButton("📽️ Slide (PPT) လုပ်မယ်", callback_data='ppt')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("ဖိုင်ကို လက်ခံရရှိပါပြီ။ ဘာလုပ်ပေးရမလဲ ရွေးချယ်ပါ -", reply_markup=reply_markup)
+    await update.message.reply_text("📁 ဖိုင်ကို လက်ခံရရှိပါပြီ။ ဘယ် Service ကို သုံးချင်ပါသလဲ?", reply_markup=reply_markup)
 
-# --- Button Callback Handler ---
+# --- ၃။ Callback Handler (ခလုတ်နှိပ်ခြင်းကို ကိုင်တွယ်ခြင်း) ---
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -87,38 +91,47 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = context.user_data.get('current_file')
     
     if not file_path:
-        await query.edit_message_text("ဖိုင်သက်တမ်း ကုန်ဆုံးသွားပါပြီ။ ပြန်ပို့ပေးပါ။")
+        await query.edit_message_text("❌ ဖိုင်သက်တမ်းကုန်သွားပါပြီ။ ကျေးဇူးပြု၍ ပြန်ပို့ပေးပါ။")
         return
 
-    await query.edit_message_text(f"လုပ်ဆောင်နေပါသည်... ⏳ ({command.upper()})")
-    res = get_ai_response(file_path, command)
-
-    # ခိုင်းစေသည့် အလုပ်အလိုက် ရလဒ်ထုတ်ပေးခြင်း
-    if command == "ocr":
-        await context.bot.send_message(chat_id=query.message.chat_id, text=f"🔍 OCR Result:\n\n{res}")
-        doc_bio = BytesIO(); doc = Document(); doc.add_paragraph(res); doc.save(doc_bio)
-        await context.bot.send_document(chat_id=query.message.chat_id, document=BytesIO(doc_bio.getvalue()), filename="OCR.docx")
+    await query.edit_message_text(f"⚙️ လုပ်ဆောင်နေပါသည်: {command.upper()}...")
     
-    elif command == "summary":
-        await context.bot.send_message(chat_id=query.message.chat_id, text=f"📝 Summary:\n\n{res}")
-        tts = gTTS(text=res, lang='my'); audio_bio = BytesIO(); tts.write_to_fp(audio_bio); audio_bio.seek(0)
-        await context.bot.send_audio(chat_id=query.message.chat_id, audio=audio_bio, title="Summary Voice")
+    prompts = {
+        "ocr": "ဤဖိုင်ထဲမှ စာသားအားလုံးကို Transcription ထုတ်ပေးပါ။",
+        "summary": "ဤဖိုင်ကို မြန်မာလို အနှစ်ချုပ်ပေးပါ။ (Audio အတွက် သီးသန့်ပေးပါ)",
+        "excel": "ဤဖိုင်ထဲမှ ဇယားများကို Markdown Table format ဖြင့်သာ ထုတ်ပေးပါ။",
+        "ppt": "Presentation Slide လုပ်ရန် အဓိကအချက်များကို Bullet points ဖြင့် ထုတ်ပေးပါ။"
+    }
+    
+    res = get_ai_response(prompts[command], file_path)
 
+    # ရလဒ်များ ပို့ပေးခြင်း
+    chat_id = query.message.chat_id
+    if command == "ocr":
+        await context.bot.send_message(chat_id=chat_id, text=f"🔍 OCR Result:\n\n{res}")
+    elif command == "summary":
+        await context.bot.send_message(chat_id=chat_id, text=f"📝 Summary:\n\n{res}")
+        tts = gTTS(text=res, lang='my'); bio = BytesIO(); tts.write_to_fp(bio); bio.seek(0)
+        await context.bot.send_audio(chat_id=chat_id, audio=bio, title="Summary Audio")
     elif command == "excel":
         ex = get_excel(res)
-        if ex: await context.bot.send_document(chat_id=query.message.chat_id, document=BytesIO(ex), filename="Data.xlsx")
-        else: await context.bot.send_message(chat_id=query.message.chat_id, text="ဇယားကွက် မတွေ့ရှိပါ။")
-
+        if ex: await context.bot.send_document(chat_id=chat_id, document=BytesIO(ex), filename="Data.xlsx")
+        else: await context.bot.send_message(chat_id=chat_id, text="❌ ဇယားကွက် မတွေ့ပါ။")
     elif command == "ppt":
         ppt_file = create_ppt(res)
-        await context.bot.send_document(chat_id=query.message.chat_id, document=ppt_file, filename="Presentation.pptx")
+        await context.bot.send_document(chat_id=chat_id, document=ppt_file, filename="Presentation.pptx")
 
-# --- Bot Execution ---
+# --- Bot Start ---
 if __name__ == '__main__':
     threading.Thread(target=run_flask, daemon=True).start()
     token = os.environ.get("TELEGRAM_TOKEN")
     if token:
         app = ApplicationBuilder().token(token).build()
+        # Media Handler
         app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_media))
-        app.add_handler(CallbackQueryHandler(button_click)) # ခလုတ်နှိပ်ခြင်းကို စစ်ဆေးရန်
+        # Text Handler (General Chat)
+        app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
+        # Button Handler
+        app.add_handler(CallbackQueryHandler(button_click))
+        print("Bot is ready...")
         app.run_polling(drop_pending_updates=True)
