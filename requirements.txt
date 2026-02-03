@@ -10,4 +10,5 @@ Pillow
 pandas
 openpyxl
 google-generativeai
+gTTS
 
