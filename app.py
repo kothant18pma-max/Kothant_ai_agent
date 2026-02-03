@@ -1,12 +1,16 @@
 import os
 import threading
 import tempfile
-from groq import Groq
+import pandas as pd
 import google.generativeai as genai
+from groq import Groq
 from huggingface_hub import InferenceClient
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import telegram.constants
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CallbackQueryHandler, CommandHandler
+from docx import Document
+from pptx import Presentation
 from io import BytesIO
 from gtts import gTTS
 
@@ -14,38 +18,80 @@ from gtts import gTTS
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 hf_client = InferenceClient(token=os.environ.get("HF_TOKEN"))
 
-# --- Flask Server ---
+# --- Flask Server (Render Health Check) ---
 flask_app = Flask(__name__)
 @flask_app.route('/')
-def home(): return "Multi-AI Agent is Active!"
+def home(): return "Multi-AI Agent is Online!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
 
-# --- ၁။ Text Chat Logic (Groq ကို သုံး၍ အလွန်မြန်စွာ ဖြေကြားခြင်း) ---
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=telegram.constants.ChatAction.TYPING)
-    
+# --- AI Logic Functions ---
+def get_groq_chat(user_text):
     try:
-        # Groq Llama-3 Model ကို သုံး၍ စာပြန်ခြင်း
-        chat_completion = groq_client.chat.completions.create(
-            messages=[{"role": "user", "content": f"Please reply in Myanmar language: {user_text}"}],
-            model="llama3-8b-8192",
+        completion = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": f"Please reply in Myanmar: {user_text}"}],
+            model="llama3-8b-8192"
         )
-        res = chat_completion.choices[0].message.content
-        await update.message.reply_text(res)
-    except Exception as e:
-        # Groq အဆင်မပြေလျှင် Hugging Face သို့မဟုတ် Gemini ဖြင့် Backup လုပ်နိုင်သည်
-        await update.message.reply_text("ခဏတာ အဆင်မပြေဖြစ်နေပါသည်။ နောက်မှ ပြန်ကြိုးစားကြည့်ပါ။")
+        return completion.choices[0].message.content
+    except:
+        # Groq အဆင်မပြေလျှင် Gemini ဖြင့် အစားထိုးသည်
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        return model.generate_content(user_text).text
 
-# --- ၂။ Image/PDF Logic (Gemini ဖြင့် Vision Task လုပ်ခြင်း) ---
-# (အရင်ပေးထားသည့် handle_media နှင့် button_click logic များကို ဆက်သုံးပါ)
-# Gemini က ပုံဖတ်ရာတွင် အတော်ဆုံးဖြစ်သောကြောင့် File အတွက် Gemini ကို ထားခဲ့ခြင်းဖြစ်ပါသည်။
+def get_gemini_file_analysis(file_path, prompt):
+    genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    uploaded_file = genai.upload_file(path=file_path)
+    return model.generate_content([prompt, uploaded_file]).text
 
-# --- ၃။ Hugging Face ကို သီးသန့် Task များအတွက် သုံးရန် (ဥပမာ - Sentiment Analysis) ---
-def analyze_with_hf(text):
-    # Hugging Face Model တစ်ခုခုကို လှမ်းသုံးခြင်း
-    res = hf_client.text_classification(text, model="distilbert-base-uncased-finetuned-sst-2-english")
-    return res
+# --- Telegram Handlers ---
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=telegram.constants.ChatAction.TYPING)
+    res = get_groq_chat(update.message.text)
+    await update.message.reply_text(res)
+
+async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    file_obj = await (update.message.document or update.message.photo[-1]).get_file()
+    suffix = ".pdf" if update.message.document else ".jpg"
+    
+    t = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    await file_obj.download_to_drive(t.name)
+    context.user_data['current_file'] = t.name
+    
+    keyboard = [
+        [InlineKeyboardButton("🔍 OCR", callback_data='ocr'), InlineKeyboardButton("📝 Summary/Audio", callback_data='summary')],
+        [InlineKeyboardButton("📊 Excel", callback_data='excel'), InlineKeyboardButton("📽️ PPT Slide", callback_data='ppt')]
+    ]
+    await update.message.reply_text("📁 ဖိုင်ရရှိပါပြီ။ ဘာလုပ်ပေးရမလဲ?", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    file_path = context.user_data.get('current_file')
+    if not file_path: return
+    
+    cmd = query.data
+    prompts = {
+        "ocr": "Extract all text (OCR).",
+        "summary": "Summarize in Myanmar and English.",
+        "excel": "Extract tables to Markdown.",
+        "ppt": "Key points for PPT slide."
+    }
+    
+    await query.edit_message_text(f"⚙️ {cmd.upper()} လုပ်ဆောင်နေပါသည်...")
+    res = get_gemini_file_analysis(file_path, prompts[cmd])
+    
+    # ရလဒ်ပေးပို့ခြင်း (Audio, PPT, Excel logic များ အရင်အတိုင်း ထည့်သွင်းနိုင်သည်)
+    await context.bot.send_message(chat_id=query.message.chat_id, text=res[:4000])
+
+if __name__ == '__main__':
+    threading.Thread(target=run_flask, daemon=True).start()
+    token = os.environ.get("TELEGRAM_TOKEN")
+    if token:
+        app = ApplicationBuilder().token(token).build()
+        app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
+        app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_media))
+        app.add_handler(CallbackQueryHandler(button_click))
+        app.run_polling(drop_pending_updates=True)
