@@ -9,11 +9,12 @@ import telegram.constants
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 from docx import Document
 from io import BytesIO
+from gtts import gTTS
 
-# --- ၁။ Flask Server (Render Health Check အတွက် အရင်ဆုံးထားပါ) ---
+# --- ၁။ Flask Server ---
 flask_app = Flask(__name__)
 @flask_app.route('/')
-def home(): return "AI Agent is Live!"
+def home(): return "AI Agent is Live with Audio Feature!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -22,7 +23,7 @@ def run_flask():
 # --- ၂။ Smart AI & OCR Logic ---
 def process_smart_ai(file_path):
     genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     uploaded_file = genai.upload_file(path=file_path)
     
@@ -30,14 +31,25 @@ def process_smart_ai(file_path):
     ဤဖိုင်ကို အသေးစိတ် စစ်ဆေးပြီး အောက်ပါအတိုင်း လုပ်ဆောင်ပါ -
     ၁။ အကယ်၍ ဖတ်ရန်စာသား မရှိပါက 'DATA_INSUFFICIENT' ဟုသာ ရေးပါ။
     ၂။ ဖတ်ရန်ရှိပါက -
-       - [OCR]: စာသားအားလုံးကို တစ်လုံးမကျန် Transcription အရင်ထုတ်ပါ။
-       - [Summary]: မြန်မာလို အနှစ်ချုပ်နှင့် ဘာသာပြန်ပေးပါ။
+       - [OCR]: စာသားအားလုံးကို တစ်လုံးမကျန် Transcription ထုတ်ပါ။
+       - [Myanmar_Summary]: မြန်မာလို အနှစ်ချုပ်ပေးပါ။
+       - [English_Summary]: အင်္ဂလိပ်လို အနှစ်ချုပ်ပေးပါ။
        - [Tables]: ဇယားများပါက Markdown Table format (| Col |) ဖြင့် ထုတ်ပေးပါ။
     """
     response = model.generate_content([prompt, uploaded_file])
     return response.text
 
-# --- ၃။ Excel Conversion ---
+# --- ၃။ Audio Generation Function ---
+def generate_audio(text, lang='my'):
+    try:
+        tts = gTTS(text=text, lang=lang)
+        audio_bio = BytesIO()
+        tts.write_to_fp(audio_bio)
+        audio_bio.seek(0)
+        return audio_bio
+    except: return None
+
+# --- ၄။ Excel Conversion ---
 def get_excel(text):
     try:
         lines = [line.strip().strip('|').split('|') for line in text.split('\n') if '|' in line]
@@ -50,12 +62,11 @@ def get_excel(text):
     except: return None
     return None
 
-# --- ၄။ Telegram Handler (NameError မဖြစ်အောင် ဤနေရာတွင် ထားပါ) ---
+# --- ၅။ Telegram Handler ---
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=telegram.constants.ChatAction.TYPING)
         
-        # File type စစ်ဆေးခြင်း
         file_obj = None
         suffix = ""
         if update.message.document:
@@ -74,9 +85,25 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if "DATA_INSUFFICIENT" in res:
                 await update.message.reply_text("⚠️ ဤဖိုင်တွင် ဖတ်ရန်စာသား မတွေ့ပါ။")
             else:
+                # စာသားရလဒ် ပို့ခြင်း
                 for i in range(0, len(res), 4000):
                     await update.message.reply_text(res[i:i+4000])
                 
+                # --- Audio Feature Section ---
+                # မြန်မာ အနှစ်ချုပ်ကို ရှာပြီး အသံထုတ်ခြင်း
+                if "[Myanmar_Summary]:" in res:
+                    my_text = res.split("[Myanmar_Summary]:")[1].split("[")[0].strip()
+                    my_voice = generate_audio(my_text, lang='my')
+                    if my_voice:
+                        await update.message.reply_audio(audio=my_voice, filename="Myanmar.mp3", title="Myanmar Audio")
+                
+                # အင်္ဂလိပ် အနှစ်ချုပ်ကို ရှာပြီး အသံထုတ်ခြင်း
+                if "[English_Summary]:" in res:
+                    en_text = res.split("[English_Summary]:")[1].split("[")[0].strip()
+                    en_voice = generate_audio(en_text, lang='en')
+                    if en_voice:
+                        await update.message.reply_audio(audio=en_voice, filename="English.mp3", title="English Audio")
+
                 # Excel & Word Files
                 ex = get_excel(res)
                 if ex: await update.message.reply_document(document=BytesIO(ex), filename="Table_Data.xlsx")
@@ -88,15 +115,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
-# --- ၅။ Main Bot Execution ---
+# --- ၆။ Main Bot Execution ---
 if __name__ == '__main__':
-    # Flask ကို Background မှာ run ခြင်း
     threading.Thread(target=run_flask, daemon=True).start()
-    
     token = os.environ.get("TELEGRAM_TOKEN")
     if token:
         app = ApplicationBuilder().token(token).build()
-        # Handler ကို မှန်ကန်စွာ ချိတ်ဆက်ခြင်း
         app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_media))
-        print("--- Smart OCR Bot is LIVE ---")
+        print("--- Smart OCR Bot with Audio is LIVE ---")
         app.run_polling(drop_pending_updates=True)
