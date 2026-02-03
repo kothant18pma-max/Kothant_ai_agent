@@ -11,19 +11,16 @@ from langchain_community.document_loaders import PyPDFLoader
 from docx import Document
 from io import BytesIO
 
-# --- ၁။ Flask Server (Render Health Check အတွက် အရေးကြီးဆုံး) ---
+# --- Flask Server (Render Health Check) ---
 flask_app = Flask(__name__)
-
 @flask_app.route('/')
-def home():
-    return "AI Agent is Live and Healthy!"
+def home(): return "Bot is Healthy!"
 
 def run_flask():
-    # Render က ပေးတဲ့ Port ကို သုံးပါ (မရှိလျှင် 10000)
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
 
-# --- ၂။ AI Processing Functions ---
+# --- Excel Logic ---
 def get_excel(text):
     try:
         lines = [line.strip().strip('|').split('|') for line in text.split('\n') if '|' in line]
@@ -35,52 +32,61 @@ def get_excel(text):
             return bio.getvalue()
     except: return None
 
+# --- AI Function (Updated for Image) ---
 def process_ai(file_path, is_image=False):
     llm = LLM(model="gemini/gemini-2.5-flash")
+    
     if is_image:
-        input_data = f"ဓာတ်ပုံဖိုင်: {file_path}"
-        task_desc = "ဓာတ်ပုံထဲက စာသားများကိုဖတ်ပြီး အနှစ်ချုပ်ပါ။ ဇယားပါက Markdown Table ဖြင့်ထုတ်ပေးပါ။"
+        # Gemini က ပုံကို တိုက်ရိုက်ဖတ်နိုင်ရန် input format ပြင်ဆင်ခြင်း
+        input_data = f"ဓာတ်ပုံဖိုင်လမ်းကြောင်း: {file_path}"
+        task_desc = "ဓာတ်ပုံထဲက စာသားများကို ဖတ်ပြီး မြန်မာလို အနှစ်ချုပ်ပါ။ ဇယားပါလျှင် Markdown Table ဖြင့် ထုတ်ပေးပါ။"
     else:
         loader = PyPDFLoader(file_path)
         input_data = "\n".join([p.page_content for p in loader.load()])
-        task_desc = "PDF အချက်အလက်များကို အနှစ်ချုပ်ပါ။ ဇယားများကို Markdown Table format ဖြင့်ထုတ်ပေးပါ။"
+        task_desc = "PDF အချက်အလက်များကို မြန်မာလို အနှစ်ချုပ်ပါ။ ဇယားများကို Markdown Table format ဖြင့် သေချာစွာ ထုတ်ပေးပါ။"
     
     agent = Agent(role='Researcher', goal='Data Extraction', backstory='Expert Analyst', llm=llm)
-    task = Task(description=f"{task_desc}\n\nData: {input_data}", expected_output="Summary and Tables", agent=agent)
+    task = Task(description=f"{task_desc}\n\nData Content: {input_data}", expected_output="Summary and Tables", agent=agent)
     return str(Crew(agents=[agent], tasks=[task]).kickoff().raw)
 
-# --- ၃။ Telegram Handler Logic ---
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.document and update.message.document.mime_type == 'application/pdf':
+# --- Telegram PDF Handler ---
+async def tg_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=telegram.constants.ChatAction.TYPING)
-        await update.message.reply_text("PDF လက်ခံရရှိပါပြီ။ တွက်ချက်နေပါသည်... 📄")
-        
+        await update.message.reply_text("PDF ဖတ်နေပါသည်... 📄")
         f = await context.bot.get_file(update.message.document.file_id)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as t:
             await f.download_to_drive(t.name)
-            res = process_ai(t.name)
-            
-            # စာသားအပိုင်းလိုက်ပို့ခြင်း (Long Message Fix)
-            for i in range(0, len(res), 4000):
-                await update.message.reply_text(res[i:i+4000])
-            
-            # Word & Excel ပြန်ပို့ခြင်း
-            doc_bio = BytesIO(); doc = Document(); doc.add_paragraph(res); doc.save(doc_bio)
-            await update.message.reply_document(document=BytesIO(doc_bio.getvalue()), filename="Report.docx")
-            
+            res = process_ai(t.name, is_image=False)
+            for i in range(0, len(res), 4000): await update.message.reply_text(res[i:i+4000])
             ex = get_excel(res)
-            if ex: await update.message.reply_document(document=BytesIO(ex), filename="Data_Table.xlsx")
+            if ex: await update.message.reply_document(document=BytesIO(ex), filename="Data.xlsx")
             os.remove(t.name)
+    except Exception as e: await update.message.reply_text(f"Error: {e}")
 
-# --- ၄။ Main Execution Block ---
+# --- Telegram Image Handler (JPEG/PNG အတွက် အသစ်) ---
+async def tg_img(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=telegram.constants.ChatAction.TYPING)
+        await update.message.reply_text("ပုံထဲက စာသားများကို ဖတ်နေပါသည်... 📷")
+        # Telegram က ပုံကို အကြီးဆုံး size ဖြင့် ယူခြင်း
+        photo_file = await update.message.photo[-1].get_file()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as t:
+            await photo_file.download_to_drive(t.name)
+            res = process_ai(t.name, is_image=True)
+            for i in range(0, len(res), 4000): await update.message.reply_text(res[i:i+4000])
+            ex = get_excel(res)
+            if ex: await update.message.reply_document(document=BytesIO(ex), filename="Image_Data.xlsx")
+            os.remove(t.name)
+    except Exception as e: await update.message.reply_text(f"Error: {e}")
+
 if __name__ == '__main__':
-    # Flask ကို Background မှာ အရင်ဆုံးနှိုးပါ (Render Healthy ဖြစ်စေရန်)
     threading.Thread(target=run_flask, daemon=True).start()
-    
     token = os.environ.get("TELEGRAM_TOKEN")
     if token:
-        # Bot ကို Polling စနစ်ဖြင့် Run ပါ
         application = ApplicationBuilder().token(token).build()
-        application.add_handler(MessageHandler(filters.Document.PDF, handle_document))
-        print("Bot is starting...")
+        # Handler နှစ်ခုစလုံးကို ထည့်သွင်းခြင်း
+        application.add_handler(MessageHandler(filters.Document.PDF, tg_pdf))
+        application.add_handler(MessageHandler(filters.PHOTO, tg_img))
+        print("Bot started with Image and PDF support...")
         application.run_polling(drop_pending_updates=True)
