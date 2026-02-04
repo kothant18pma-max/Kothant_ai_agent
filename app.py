@@ -29,7 +29,7 @@ def get_gemini_res(prompt, file_path=None):
     key = os.environ.get("GOOGLE_API_KEY")
     if not key: return "Error: Gemini API Key missing."
     genai.configure(api_key=key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     if file_path:
         up_file = genai.upload_file(path=file_path)
         return model.generate_content([prompt, up_file]).text
@@ -83,3 +83,4 @@ if __name__ == '__main__':
         app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_media))
         app.add_handler(CallbackQueryHandler(button_click))
         app.run_polling(drop_pending_updates=True)
+
