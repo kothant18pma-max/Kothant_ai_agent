@@ -14,4 +14,8 @@ gTTS
 python-pptx
 groq
 huggingface_hub
+google-generativeai
+python-telegram-bot==20.8
+huggingface_hub
+gunicorn
 
