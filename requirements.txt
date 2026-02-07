@@ -9,9 +9,11 @@ python-docx
 Pillow
 pandas
 openpyxl
-google-generativeai
+google-generativeai>=0.3.0
+google-auth>=2.15.0
 gTTS
 python-pptx
 groq
 huggingface_hub
+
 
