@@ -15,5 +15,6 @@ gTTS
 python-pptx
 groq
 huggingface_hub
+openai
 
 
