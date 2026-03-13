@@ -2,11 +2,12 @@ import os
 import threading
 import tempfile
 import google.generativeai as genai
-import pandas as pd # Excel အတွက် ထပ်တို
 from huggingface_hub import InferenceClient
 from openai import OpenAI
 from flask import Flask
-from pptx import Presentation # PowerPoint အတွက် လိုအပ်သည်
+from pptx import Presentation # PowerPoint အတွက် (pip install python-pptx)
+from openpyxl import Workbook # Excel အတွက် (pip install openpyxl)
+from docx import Document # Word အတွက် (pip install python-docx)
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
@@ -45,25 +46,40 @@ def create_pptx(content_text, output_path):
     slide.shapes.title.text = "AI Generated Presentation"
     slide.placeholders[1].text = "Summarized by AI Bot"
 
-    # Content Slides (စာကြောင်း ၅ ကြောင်းလျှင် Slide တစ်ခုနှုန်း ခွဲထုတ်ခြင်း)
+    # Content Slides
     for i in range(0, len(lines), 5):
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         slide.shapes.title.text = f"Key Points (Part {i//5 + 1})"
         slide.placeholders[1].text = "\n".join(lines[i:i+5])
             
     prs.save(output_path)
+
+def create_excel(content_text, output_path):
+    """AI ပေးသော စာသားကို Excel အဖြစ် ပြောင်းလဲပေးရန်"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "AI Generated Data"
     
-def create_xlsx(content_text, output_path):
-    """AI ပေးသော စာသားကို Excel Table အဖြစ် ပြောင်းလဲပေးရန်"""
-    # စာကြောင်းတွေကို တစ်ကြောင်းချင်းစီ ခွဲထုတ်ပြီး List လုပ်ခြင်း
-    lines = [line.strip() for line in content_text.split('\n') if line.strip()]
+    lines = content_text.strip().split('\n')
+    for line in lines:
+        cells = [cell.strip() for cell in line.split(',')]
+        ws.append(cells)
+        
+    wb.save(output_path)
+
+def create_word(content_text, output_path):
+    """AI ပေးသော စာသားကို Word Document အဖြစ် ပြောင်းလဲပေးရန်"""
+    doc = Document()
+    doc.add_heading('AI Generated Document', 0)
     
-    # DataFrame တည်ဆောက်ခြင်း
-    df = pd.DataFrame(lines, columns=["Extracted Information"])
-    
-    # Excel ဖိုင်အဖြစ် သိမ်းခြင်း
-    df.to_excel(output_path, index=False)
-    
+    # စာသားကို စာကြောင်းလိုက် ခွဲ၍ Paragraph များ ထည့်သည်
+    lines = content_text.split('\n')
+    for line in lines:
+        if line.strip():
+            doc.add_paragraph(line)
+            
+    doc.save(output_path)
+
 # --- AI Core Functions ---
 
 def get_gemini_res(prompt, file_path=None):
@@ -99,9 +115,11 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await file_obj.download_to_drive(t.name)
         context.user_data['current_file'] = t.name
     
+    # Word အတွက် ခလုတ် ထပ်ထည့်ပေးလိုက်ပါပြီ
     kb = [
         [InlineKeyboardButton("🔍 OCR", callback_data='ocr'), InlineKeyboardButton("📝 Summary", callback_data='sum')],
-        [InlineKeyboardButton("📊 Create PPTX", callback_data='pptx'), InlineKeyboardButton(" Excel", callback_data='xlsx')] # Excel ခလုတ် ထည့်လိုက်သည်
+        [InlineKeyboardButton("📊 Create PPTX", callback_data='pptx'), InlineKeyboardButton("📈 Create Excel", callback_data='excel')],
+        [InlineKeyboardButton("📄 Create Word", callback_data='docx')]
     ]
     await update.message.reply_text("📁 ဖိုင်ရပါပြီ။ ဘာလုပ်ရမလဲ?", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -112,28 +130,35 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not file_path: return
 
     cmd = query.data
+    
     if cmd == 'pptx':
         await query.edit_message_text("⚙️ PowerPoint ဖန်တီးနေပါသည်...")
-        # Gemini ကို presentation ပုံစံ ခွဲခိုင်းခြင်း
         prompt = "Extract key facts from this file and list them line by line for a presentation."
         res = get_gemini_res(prompt, file_path)
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as t:
             create_pptx(res, t.name)
             await context.bot.send_document(chat_id=query.message.chat_id, document=open(t.name, 'rb'), filename="AI_Presentation.pptx")
-            elif cmd == 'xlsx':
-        await query.edit_message_text("⚙️ Excel ဖိုင် ဖန်တီးနေပါသည်...")
-        # Gemini ကို Data တွေကို List ပုံစံ ထုတ်ခိုင်းခြင်း
-        prompt = "Extract all key data from this file and list them row by row for an Excel sheet. No conversational text."
+            
+    elif cmd == 'excel':
+        await query.edit_message_text("⚙️ Excel ဖိုင်ဖန်တီးနေပါသည်...")
+        prompt = "Extract the data from this file and format it as a CSV table with headers. Just output the data comma separated."
         res = get_gemini_res(prompt, file_path)
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as t:
-            create_xlsx(res, t.name)
-            await context.bot.send_document(
-                chat_id=query.message.chat_id, 
-                document=open(t.name, 'rb'), 
-                filename="AI_Data_Export.xlsx"
-            )
+            create_excel(res, t.name)
+            await context.bot.send_document(chat_id=query.message.chat_id, document=open(t.name, 'rb'), filename="AI_Data.xlsx")
+            
+    elif cmd == 'docx':
+        # Word ဖိုင်ဖန်တီးရန် Logic အသစ်
+        await query.edit_message_text("⚙️ Word ဖိုင်ဖန်တီးနေပါသည်...")
+        prompt = "Extract the text content from this file and format it nicely with paragraphs."
+        res = get_gemini_res(prompt, file_path)
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as t:
+            create_word(res, t.name)
+            await context.bot.send_document(chat_id=query.message.chat_id, document=open(t.name, 'rb'), filename="AI_Document.docx")
+            
     else:
         prompt = "Extract all text." if cmd == 'ocr' else "Summarize this clearly in Myanmar."
         await query.edit_message_text(f"⚙️ {cmd.upper()} လုပ်ဆောင်နေပါသည်...")
@@ -149,4 +174,3 @@ if __name__ == '__main__':
         app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_media))
         app.add_handler(CallbackQueryHandler(button_click))
         app.run_polling(drop_pending_updates=True)
-
