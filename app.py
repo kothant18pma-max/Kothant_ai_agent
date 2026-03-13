@@ -37,16 +37,13 @@ async def send_split_message(update_or_query, text):
             await update_or_query.message.chat.send_message(part)
 
 def create_pptx(content_text, output_path):
-    """AI ပေးသော စာသားကို Slide များအဖြစ် ပြောင်းလဲပေးရန်"""
     prs = Presentation()
     lines = content_text.split('\n')
     
-    # Title Slide
     slide = prs.slides.add_slide(prs.slide_layouts[0])
     slide.shapes.title.text = "AI Generated Presentation"
     slide.placeholders[1].text = "Summarized by AI Bot"
 
-    # Content Slides
     for i in range(0, len(lines), 5):
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         slide.shapes.title.text = f"Key Points (Part {i//5 + 1})"
@@ -55,24 +52,25 @@ def create_pptx(content_text, output_path):
     prs.save(output_path)
 
 def create_excel(content_text, output_path):
-    """AI ပေးသော စာသားကို Excel အဖြစ် ပြောင်းလဲပေးရန်"""
+    """AI ပေးသော CSV data ကို Excel အဖြစ် ပြောင်းပေးရန်"""
     wb = Workbook()
     ws = wb.active
-    ws.title = "AI Generated Data"
+    ws.title = "Extracted Data"
     
     lines = content_text.strip().split('\n')
     for line in lines:
+        if not line.strip(): continue # တိုက်ရိုက် line များကို ချန်လှပ်
+        # Comma (,) ဖြင့် ခွဲထားသော data များကို Cell အလိုက် ထည့်သည်
         cells = [cell.strip() for cell in line.split(',')]
         ws.append(cells)
         
     wb.save(output_path)
 
 def create_word(content_text, output_path):
-    """AI ပေးသော စာသားကို Word Document အဖြစ် ပြောင်းလဲပေးရန်"""
+    """AI ပေးသော စာသားကို Word အဖြစ် ပြောင်းပေးရန်"""
     doc = Document()
-    doc.add_heading('AI Generated Document', 0)
+    doc.add_heading('Extracted Document', 0)
     
-    # စာသားကို စာကြောင်းလိုက် ခွဲ၍ Paragraph များ ထည့်သည်
     lines = content_text.split('\n')
     for line in lines:
         if line.strip():
@@ -88,12 +86,12 @@ def get_gemini_res(prompt, file_path=None):
     genai.configure(api_key=key)
     model = genai.GenerativeModel('gemini-2.5-flash') 
     if file_path:
+        # Gemini သည် PDF နှင့် Image နှစ်မျိုးလုံးကို ဖတ်နိုင်သည်
         up_file = genai.upload_file(path=file_path)
         return model.generate_content([prompt, up_file]).text
     return model.generate_content(prompt).text
 
 def get_ai_chat(text):
-    # DeepSeek -> Grok -> HF Fallback
     for func in [lambda: ds_client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": text}]).choices[0].message.content if ds_client else None,
                  lambda: grok_client.chat.completions.create(model="grok-beta", messages=[{"role": "user", "content": text}]).choices[0].message.content if grok_client else None]:
         try:
@@ -109,13 +107,24 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_split_message(update, res)
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file_obj = await (update.message.document or update.message.photo[-1]).get_file()
-    suffix = ".pdf" if update.message.document else ".jpg"
+    # ဖိုင်အမျိုးအစား စစ်ဆေးခြင်း (JPEG နှင့် PDF အတွက် အထူးပြုလုပ်ထားသည်)
+    if update.message.document:
+        file_obj = await update.message.document.get_file()
+        # File extension ကို အလိုအလျောက် ယူသည် (ဥပမာ .pdf, .jpg)
+        original_name = update.message.document.file_name
+        _, ext = os.path.splitext(original_name)
+        suffix = ext if ext else ".pdf" # extension မရှိရင် PDF အဖြစ် သတ်မှတ်
+    elif update.message.photo:
+        file_obj = await update.message.photo[-1].get_file()
+        suffix = ".jpg" # Telegram photos are jpg
+    else:
+        return
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as t:
         await file_obj.download_to_drive(t.name)
         context.user_data['current_file'] = t.name
     
-    # Word အတွက် ခလုတ် ထပ်ထည့်ပေးလိုက်ပါပြီ
+    # Word နှင့် Excel ခလုတ်များ ပါဝင်သော Menu
     kb = [
         [InlineKeyboardButton("🔍 OCR", callback_data='ocr'), InlineKeyboardButton("📝 Summary", callback_data='sum')],
         [InlineKeyboardButton("📊 Create PPTX", callback_data='pptx'), InlineKeyboardButton("📈 Create Excel", callback_data='excel')],
@@ -133,7 +142,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if cmd == 'pptx':
         await query.edit_message_text("⚙️ PowerPoint ဖန်တီးနေပါသည်...")
-        prompt = "Extract key facts from this file and list them line by line for a presentation."
+        prompt = "Extract key facts from this file and list them line by line."
         res = get_gemini_res(prompt, file_path)
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as t:
@@ -141,8 +150,15 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_document(chat_id=query.message.chat_id, document=open(t.name, 'rb'), filename="AI_Presentation.pptx")
             
     elif cmd == 'excel':
-        await query.edit_message_text("⚙️ Excel ဖိုင်ဖန်တီးနေပါသည်...")
-        prompt = "Extract the data from this file and format it as a CSV table with headers. Just output the data comma separated."
+        await query.edit_message_text("⚙️ Excel ဖိုင်ဖန်တီးနေပါသည်... (Data များ ပြန်လည်စီစစ်နေပါသည်)")
+        # JPEG/PDF ထဲမှ Data များကို CSV format နှင့် တိုက်ရိုက်ထုတ်ပေးရန် မေးမြန်းခြင်း
+        prompt = (
+            "Analyze the provided document or image. "
+            "Extract all data structures or tables. "
+            "Output ONLY valid CSV format (comma-separated values). "
+            "Do not add any explanation or markdown code blocks. "
+            "If there are no tables, list the key information in rows."
+        )
         res = get_gemini_res(prompt, file_path)
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as t:
@@ -150,9 +166,9 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_document(chat_id=query.message.chat_id, document=open(t.name, 'rb'), filename="AI_Data.xlsx")
             
     elif cmd == 'docx':
-        # Word ဖိုင်ဖန်တီးရန် Logic အသစ်
-        await query.edit_message_text("⚙️ Word ဖိုင်ဖန်တီးနေပါသည်...")
-        prompt = "Extract the text content from this file and format it nicely with paragraphs."
+        await query.edit_message_text("⚙️ Word ဖိုင်ဖန်တီးနေပါသည်... (OCR ဆောင်ရွက်နေပါသည်)")
+        # JPEG/PDF ထဲမှ စာသားများကို အပြည့်အစုံ ထုတ်ပေးရန် မေးမြန်းခြင်း
+        prompt = "Perform OCR on this file. Extract all text content clearly. Maintain original structure if possible."
         res = get_gemini_res(prompt, file_path)
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as t:
@@ -160,7 +176,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_document(chat_id=query.message.chat_id, document=open(t.name, 'rb'), filename="AI_Document.docx")
             
     else:
-        prompt = "Extract all text." if cmd == 'ocr' else "Summarize this clearly in Myanmar."
+        prompt = "Extract all text clearly." if cmd == 'ocr' else "Summarize this clearly in Myanmar."
         await query.edit_message_text(f"⚙️ {cmd.upper()} လုပ်ဆောင်နေပါသည်...")
         res = get_gemini_res(prompt, file_path)
         await send_split_message(query, res)
