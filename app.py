@@ -2,6 +2,7 @@ import os
 import threading
 import tempfile
 import google.generativeai as genai
+import pandas as pd # Excel အတွက် ထပ်တို
 from huggingface_hub import InferenceClient
 from openai import OpenAI
 from flask import Flask
@@ -51,7 +52,18 @@ def create_pptx(content_text, output_path):
         slide.placeholders[1].text = "\n".join(lines[i:i+5])
             
     prs.save(output_path)
-
+    
+def create_xlsx(content_text, output_path):
+    """AI ပေးသော စာသားကို Excel Table အဖြစ် ပြောင်းလဲပေးရန်"""
+    # စာကြောင်းတွေကို တစ်ကြောင်းချင်းစီ ခွဲထုတ်ပြီး List လုပ်ခြင်း
+    lines = [line.strip() for line in content_text.split('\n') if line.strip()]
+    
+    # DataFrame တည်ဆောက်ခြင်း
+    df = pd.DataFrame(lines, columns=["Extracted Information"])
+    
+    # Excel ဖိုင်အဖြစ် သိမ်းခြင်း
+    df.to_excel(output_path, index=False)
+    
 # --- AI Core Functions ---
 
 def get_gemini_res(prompt, file_path=None):
@@ -89,7 +101,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     kb = [
         [InlineKeyboardButton("🔍 OCR", callback_data='ocr'), InlineKeyboardButton("📝 Summary", callback_data='sum')],
-        [InlineKeyboardButton("📊 Create PPTX", callback_data='pptx')]
+        [InlineKeyboardButton("📊 Create PPTX", callback_data='pptx'), InlineKeyboardButton(" Excel", callback_data='xlsx')] # Excel ခလုတ် ထည့်လိုက်သည်
     ]
     await update.message.reply_text("📁 ဖိုင်ရပါပြီ။ ဘာလုပ်ရမလဲ?", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -109,6 +121,19 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as t:
             create_pptx(res, t.name)
             await context.bot.send_document(chat_id=query.message.chat_id, document=open(t.name, 'rb'), filename="AI_Presentation.pptx")
+            elif cmd == 'xlsx':
+        await query.edit_message_text("⚙️ Excel ဖိုင် ဖန်တီးနေပါသည်...")
+        # Gemini ကို Data တွေကို List ပုံစံ ထုတ်ခိုင်းခြင်း
+        prompt = "Extract all key data from this file and list them row by row for an Excel sheet. No conversational text."
+        res = get_gemini_res(prompt, file_path)
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as t:
+            create_xlsx(res, t.name)
+            await context.bot.send_document(
+                chat_id=query.message.chat_id, 
+                document=open(t.name, 'rb'), 
+                filename="AI_Data_Export.xlsx"
+            )
     else:
         prompt = "Extract all text." if cmd == 'ocr' else "Summarize this clearly in Myanmar."
         await query.edit_message_text(f"⚙️ {cmd.upper()} လုပ်ဆောင်နေပါသည်...")
@@ -124,3 +149,4 @@ if __name__ == '__main__':
         app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, handle_media))
         app.add_handler(CallbackQueryHandler(button_click))
         app.run_polling(drop_pending_updates=True)
+
